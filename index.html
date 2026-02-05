@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Smart Meter Image Scanner</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- OCR -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+<!-- Barcode -->
+<script src="https://unpkg.com/@ericblade/quagga2/dist/quagga.js"></script>
+
+<style>
+  body {
+    margin: 0;
+    background: #000;
+    font-family: monospace;
+    color: #00ff88;
+  }
+
+  #statusBar {
+    position: fixed;
+    top: 0;
+    width: 100%;
+    background: rgba(0,0,0,0.9);
+    padding: 10px;
+    display: flex;
+    justify-content: space-between;
+    z-index: 10;
+    box-sizing: border-box;
+  }
+
+  #container {
+    padding-top: 60px;
+    text-align: center;
+  }
+
+  input[type="file"] {
+    margin: 20px;
+    font-size: 16px;
+  }
+
+  #log {
+    font-size: 14px;
+    margin-top: 10px;
+  }
+
+  button {
+    padding: 10px 18px;
+    font-weight: bold;
+    background: #00ff88;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+</style>
+</head>
+
+<body>
+
+<div id="statusBar">
+  <div>Scanned: <span id="count">0</span> / 20</div>
+  <div id="last"></div>
+</div>
+
+<div id="container">
+  <input type="file" accept="image/*" multiple id="imageInput">
+  <br>
+  <button onclick="downloadCSV()">Download CSV</button>
+  <div id="log"></div>
+</div>
+
+<script>
+const MAX_CODES = 20;
+const METER_REGEX = /00\d{7}/g;
+const scanned = [];
+const scannedSet = new Set();
+
+function updateUI(last="") {
+  document.getElementById("count").textContent = scanned.length;
+  document.getElementById("last").textContent = last ? "Last: " + last : "";
+}
+
+function addCode(code) {
+  if (!scannedSet.has(code)) {
+    scannedSet.add(code);
+    scanned.push(code);
+    updateUI(code);
+  }
+}
+
+async function processImage(file) {
+  document.getElementById("log").textContent = "Processing " + file.name;
+
+  // ---- OCR ----
+  const ocr = await Tesseract.recognize(file, "eng");
+  const text = ocr.data.text;
+  const matches = text.match(METER_REGEX) || [];
+  matches.forEach(addCode);
+
+  // ---- BARCODE ----
+  Quagga.decodeSingle({
+    src: URL.createObjectURL(file),
+    numOfWorkers: 0,
+    decoder: {
+      readers: ["code128_reader", "ean_reader", "ean_8_reader"]
+    }
+  }, result => {
+    if (result && result.codeResult) {
+      const code = result.codeResult.code;
+      if (code.match(/^00\d{7}$/)) addCode(code);
+    }
+  });
+
+  if (scanned.length >= MAX_CODES) {
+    document.getElementById("log").textContent = "Limit reached";
+  }
+}
+
+document.getElementById("imageInput").addEventListener("change", e => {
+  const files = [...e.target.files];
+  for (const file of files) {
+    if (scanned.length < MAX_CODES) processImage(file);
+  }
+});
+
+function downloadCSV() {
+  let csv = "Meter Number\n";
+  scanned.forEach(c => csv += c + "\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "meter_numbers.csv";
+  a.click();
+}
+</script>
+
+</body>
+</html>
