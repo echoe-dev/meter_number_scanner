@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Smart Meter Scanner Pro</title>
+<title>Smart Meter Barcode Scanner</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<!-- Quagga -->
 <script src="https://unpkg.com/@ericblade/quagga2/dist/quagga.js"></script>
 
 <style>
@@ -28,19 +28,20 @@
   }
 
   #container {
-    padding-top: 60px;
+    padding-top: 70px;
     text-align: center;
   }
 
-  button, input {
+  input, button {
     margin: 10px;
-    padding: 10px;
+    padding: 12px;
     font-weight: bold;
   }
 
   #log {
     font-size: 13px;
     opacity: 0.9;
+    margin-top: 10px;
   }
 </style>
 </head>
@@ -60,35 +61,48 @@
 </div>
 
 <script>
+/* ================= CONFIG ================= */
 const MAX_CODES = 100;
-const METER_REGEX = /00\d{7}/g;
+const METER_REGEX = /^00\d{7}$/;
 
-const scanned = [];
+/* ================= STATE ================== */
 const scannedSet = new Set();
+const scannedList = [];
 
-function updateUI(last="") {
-  document.getElementById("count").textContent = scanned.length;
+/* ================= UI ===================== */
+function updateUI(last = "") {
+  document.getElementById("count").textContent = scannedList.length;
   document.getElementById("last").textContent = last ? "Last: " + last : "";
 }
 
-function addCode(code) {
-  if (!scannedSet.has(code)) {
-    scannedSet.add(code);
-    scanned.push(code);
-    updateUI(code);
-  }
+/* ================= CSV ==================== */
+function downloadCSV() {
+  let csv = "Meter Number\n";
+  scannedList.forEach(c => csv += c + "\n");
+
+  const blob = new Blob([csv], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "meter_numbers.csv";
+  a.click();
 }
 
-// ---------- BARCODE (FAST) ----------
+/* ================= BARCODE ================= */
 function scanBarcode(file) {
   return new Promise(resolve => {
     Quagga.decodeSingle({
       src: URL.createObjectURL(file),
       numOfWorkers: 0,
-      inputStream: { size: 800 },
-      decoder: { readers: ["code128_reader","ean_reader","ean_8_reader"] }
+      inputStream: { size: 1000 },
+      decoder: {
+        readers: [
+          "code128_reader",
+          "ean_reader",
+          "ean_8_reader"
+        ]
+      }
     }, result => {
-      if (result?.codeResult?.code?.match(/^00\d{7}$/)) {
+      if (result && result.codeResult) {
         resolve(result.codeResult.code);
       } else {
         resolve(null);
@@ -97,56 +111,32 @@ function scanBarcode(file) {
   });
 }
 
-// ---------- OCR (ONLY IF NEEDED) ----------
-async function scanOCR(file) {
-  const { data } = await Tesseract.recognize(file, "eng", {
-    tessedit_char_whitelist: "0123456789",
-    logger: () => {}
+/* ================= PIPELINE ================= */
+async function processImages(files) {
+  document.getElementById("log").textContent = "Scanning images...";
+
+  const tasks = files.map(file => scanBarcode(file));
+
+  const results = await Promise.all(tasks);
+
+  results.forEach(code => {
+    if (!code) return;
+    if (!METER_REGEX.test(code)) return;
+    if (scannedSet.has(code)) return;
+
+    scannedSet.add(code);
+    scannedList.push(code);
+    updateUI(code);
   });
-  return data.text.match(METER_REGEX) || [];
+
+  document.getElementById("log").textContent = "Scan finished";
 }
 
-// ---------- IMAGE PIPELINE ----------
-async function processImage(file) {
-  document.getElementById("log").textContent = "Scanning " + file.name;
-
-  // 1️⃣ Barcode first
-  const barcode = await scanBarcode(file);
-  if (barcode && !scannedSet.has(barcode)) {
-    addCode(barcode);
-    return;
-  }
-
-  // 2️⃣ OCR fallback
-  const ocrCodes = await scanOCR(file);
-  ocrCodes.forEach(addCode);
-}
-
-// ---------- MULTI-IMAGE PARALLEL ----------
-document.getElementById("imageInput").addEventListener("change", async e => {
+/* ================= EVENTS ================= */
+document.getElementById("imageInput").addEventListener("change", e => {
   const files = [...e.target.files];
-
-  await Promise.all(
-    files.map(file => {
-      if (scanned.length < MAX_CODES) {
-        return processImage(file);
-      }
-    })
-  );
-
-  document.getElementById("log").textContent = "Scan complete";
+  processImages(files);
 });
-
-// ---------- CSV ----------
-function downloadCSV() {
-  let csv = "Meter Number\n";
-  scanned.forEach(c => csv += c + "\n");
-  const blob = new Blob([csv], { type: "text/csv" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "meter_numbers.csv";
-  a.click();
-}
 </script>
 
 </body>
