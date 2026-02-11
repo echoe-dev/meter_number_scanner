@@ -5,7 +5,6 @@
 <title>Smart Meter Barcode Scanner</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<!-- Quagga -->
 <script src="https://unpkg.com/@ericblade/quagga2/dist/quagga.js"></script>
 
 <style>
@@ -21,7 +20,7 @@
     top: 0;
     width: 100%;
     padding: 10px;
-    background: rgba(0,0,0,0.9);
+    background: rgba(0,0,0,0.95);
     display: flex;
     justify-content: space-between;
     z-index: 10;
@@ -68,6 +67,7 @@ const METER_REGEX = /^00\d{7}$/;
 /* ================= STATE ================== */
 const scannedSet = new Set();
 const scannedList = [];
+let isScanning = false;
 
 /* ================= UI ===================== */
 function updateUI(last = "") {
@@ -90,10 +90,16 @@ function downloadCSV() {
 /* ================= BARCODE ================= */
 function scanBarcode(file) {
   return new Promise(resolve => {
+
+    const objectURL = URL.createObjectURL(file);
+
     Quagga.decodeSingle({
-      src: URL.createObjectURL(file),
-      numOfWorkers: 0,
-      inputStream: { size: 1000 },
+      src: objectURL,
+      numOfWorkers: navigator.hardwareConcurrency || 2,
+      locate: true,
+      inputStream: {
+        size: 800
+      },
       decoder: {
         readers: [
           "code128_reader",
@@ -102,6 +108,9 @@ function scanBarcode(file) {
         ]
       }
     }, result => {
+
+      URL.revokeObjectURL(objectURL); // Prevent memory leak
+
       if (result && result.codeResult) {
         resolve(result.codeResult.code);
       } else {
@@ -113,29 +122,42 @@ function scanBarcode(file) {
 
 /* ================= PIPELINE ================= */
 async function processImages(files) {
-  document.getElementById("log").textContent = "Scanning images...";
 
-  const tasks = files.map(file => scanBarcode(file));
+  if (isScanning) return;
+  isScanning = true;
 
-  const results = await Promise.all(tasks);
+  const log = document.getElementById("log");
+  log.textContent = `Scanning ${files.length} images...`;
 
-  results.forEach(code => {
-    if (!code) return;
-    if (!METER_REGEX.test(code)) return;
-    if (scannedSet.has(code)) return;
+  let index = 0;
 
-    scannedSet.add(code);
-    scannedList.push(code);
-    updateUI(code);
-  });
+  for (const file of files) {
 
-  document.getElementById("log").textContent = "Scan finished";
+    index++;
+    log.textContent = `Scanning ${index} / ${files.length}...`;
+
+    const code = await scanBarcode(file);
+
+    if (code && METER_REGEX.test(code) && !scannedSet.has(code)) {
+      scannedSet.add(code);
+      scannedList.push(code);
+      updateUI(code);
+    }
+
+    // Small delay prevents UI freeze
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  log.textContent = "Scan finished ✓";
+  isScanning = false;
 }
 
 /* ================= EVENTS ================= */
 document.getElementById("imageInput").addEventListener("change", e => {
   const files = [...e.target.files];
-  processImages(files);
+  if (files.length > 0) {
+    processImages(files);
+  }
 });
 </script>
 
